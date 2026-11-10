@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>우리 반 발표왕</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jua&family=Gowun+Dodum&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- 상단 바: 제목, 학급 이름, 날짜 -->
+  <header class="top">
+    <div class="wrap top-row">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">🎤</span>
+        <h1>우리 반 <span>발표왕</span></h1>
+        <input id="className" class="classname" aria-label="학급 이름" placeholder="학급 이름 (예: 3학년 2반)" maxlength="30">
+      </div>
+      <div class="datebar" role="group" aria-label="기록 날짜">
+        <button id="prevDay" class="round" aria-label="전날">‹</button>
+        <input id="dateInput" type="date" aria-label="날짜 선택">
+        <button id="nextDay" class="round" aria-label="다음날">›</button>
+        <button id="todayBtn" class="pill-btn">오늘</button>
+      </div>
+    </div>
+    <div class="wrap">
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-view="record" aria-selected="true">✏️ 기록하기</button>
+        <button role="tab" data-view="board" aria-selected="false">📊 현황판</button>
+        <button role="tab" data-view="manage" aria-selected="false">👥 학생 관리</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <!-- 요약 숫자 -->
+    <section class="summary" aria-label="요약">
+      <div class="stat c-peach"><div class="k" id="sumDayLabel">오늘 발표</div><div class="v" id="sumDay">0<small>회</small></div></div>
+      <div class="stat c-mint"><div class="k" id="sumWhoLabel">오늘 발표한 친구</div><div class="v" id="sumWho">0<small>/ 0명</small></div></div>
+      <div class="stat c-sky"><div class="k">전체 누적</div><div class="v" id="sumAll">0<small>회</small></div></div>
+      <div class="stat c-lilac"><div class="k">아직 발표 안 한 친구</div><div class="v" id="sumZero">0<small>명</small></div></div>
+    </section>
+
+    <!-- 1. 기록하기 -->
+    <section id="view-record">
+      <div class="record-head">
+        <p class="hint">친구가 발표할 때마다 <b>+1</b>을 눌러 주세요. 잘못 눌렀으면 <b>−</b>로 줄일 수 있어요.</p>
+        <button id="openPicker" class="big-btn">🎲 발표자 뽑기</button>
+      </div>
+      <div id="grid" class="grid"></div>
+    </section>
+
+    <!-- 2. 현황판 -->
+    <section id="view-board" hidden>
+      <div class="board">
+        <div class="panel">
+          <h2>🏆 발표 순위</h2>
+          <p class="sub" id="rangeLabel"></p>
+          <div class="seg" id="rangeSeg">
+            <button data-r="day" aria-pressed="false">선택한 날</button>
+            <button data-r="week" aria-pressed="true">이번 주</button>
+            <button data-r="month" aria-pressed="false">이번 달</button>
+            <button data-r="all" aria-pressed="false">전체</button>
+          </div>
+          <ol class="rank" id="rank"></ol>
+          <p class="legend"><b></b> 노란 선은 우리 반 평균 (<span id="avgVal">0</span>회)</p>
+        </div>
+
+        <div class="side">
+          <div class="panel">
+            <h2>🌱 기회가 필요한 친구</h2>
+            <p class="sub">이 기간에 아직 발표하지 않은 친구예요.</p>
+            <div class="chips" id="needChips"></div>
+          </div>
+          <div class="panel">
+            <h2>🖨️ 개인 발표 현황표</h2>
+            <p class="sub">학생 한 명의 누적 기록, 월별 그래프, 날짜별 기록을 A4 한 장으로 출력해요. 상담 자료나 가정 통신용으로 쓸 수 있어요.</p>
+            <div class="row">
+              <label for="reportStudent" class="sr">학생 선택</label>
+              <select id="reportStudent" class="select"></select>
+              <button id="printOne" class="pill-btn">A4로 출력</button>
+            </div>
+            <button id="printAll" class="link-btn">전체 학생 한 번에 출력 (1명당 1장)</button>
+          </div>
+          <div class="panel">
+            <h2>📅 최근 2주 기록</h2>
+            <p class="sub">평일 기준이에요. 색이 진할수록 발표를 많이 한 날이에요.</p>
+            <div class="heat" id="heat"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. 학생 관리 -->
+    <section id="view-manage" hidden>
+      <div class="manage">
+        <div class="panel">
+          <h2>➕ 학생 추가</h2>
+          <p class="sub">아이디는 S001, S002… 순서로 자동으로 붙어요.</p>
+          <form id="addOne">
+            <div class="row">
+              <div class="field field-num"><label for="addNum">번호</label><input id="addNum" inputmode="numeric" maxlength="3"></div>
+              <div class="field field-name"><label for="addName">이름</label><input id="addName" maxlength="20" required></div>
+            </div>
+            <button class="big-btn" type="submit">추가하기</button>
+          </form>
+
+          <hr>
+
+          <h2>📋 여러 명 한 번에 추가</h2>
+          <p class="sub">한 줄에 한 명씩 써 주세요. "1 김민준"처럼 번호를 앞에 써도 돼요.</p>
+          <form id="addMany">
+            <div class="field">
+              <label for="bulk">명단</label>
+              <textarea id="bulk" placeholder="1 김민준&#10;2 이서연&#10;3 박도윤"></textarea>
+            </div>
+            <button class="big-btn" type="submit">명단 추가하기</button>
+          </form>
+
+          <hr>
+
+          <h2>💾 저장과 백업</h2>
+          <p class="sub">기록은 이 컴퓨터의 브라우저에 저장돼요. 다른 컴퓨터로 옮기거나 잃어버리지 않으려면 백업 파일을 만들어 두세요.</p>
+          <div class="row">
+            <button id="exportCsv" class="pill-btn">엑셀용 CSV 저장</button>
+            <button id="exportJson" class="pill-btn">백업 파일 저장</button>
+            <label class="pill-btn file-btn">백업 불러오기<input id="importJson" type="file" accept=".json,application/json" hidden></label>
+          </div>
+          <p class="sub msg" id="backupMsg"></p>
+        </div>
+
+        <div class="panel">
+          <h2>👥 학생 명단 <span id="rosterCount" class="muted"></span></h2>
+          <p class="sub">이름과 번호를 눌러 바로 고칠 수 있어요. 삭제하면 그 학생의 발표 기록도 함께 지워져요.</p>
+          <div class="tablewrap">
+            <table class="roster">
+              <thead><tr><th>아이디</th><th>번호</th><th>이름</th><th>누적</th><th></th></tr></thead>
+              <tbody id="rosterBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- 발표자 뽑기 창 -->
+  <div id="picker" class="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="pickerTitle">
+      <button id="closePicker" class="close" aria-label="닫기">×</button>
+      <h2 id="pickerTitle">🎲 오늘의 발표자는?</h2>
+      <div id="pickName" class="pick-name">두근두근</div>
+      <div id="pickMeta" class="pick-meta">버튼을 눌러 뽑아 보세요</div>
+      <p class="pick-rule">발표를 <b>가장 적게 한 친구들</b> 중에서 뽑아요.</p>
+      <div class="seg center" id="pickBasis" aria-label="발표 횟수를 셀 기간">
+        <button data-b="all" aria-pressed="true">전체 누적</button>
+        <button data-b="week" aria-pressed="false">이번 주</button>
+        <button data-b="day" aria-pressed="false">선택한 날</button>
+      </div>
+      <div id="pickPool" class="pick-pool"></div>
+      <div class="row center">
+        <button id="drawBtn" class="big-btn">뽑기!</button>
+        <button id="pickPlus" class="big-btn mint" hidden>발표 +1</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 알림 -->
+  <div id="toast" class="toast" hidden>
+    <span id="toastMsg"></span>
+    <button id="toastUndo">되돌리기</button>
+  </div>
+
+  <!-- 인쇄 전용 영역: 화면에서는 숨기고, 출력할 때만 보입니다 -->
+  <div id="printArea" aria-hidden="true"></div>
+
+  <script src="script.js"></script>
+</body>
+</html>
