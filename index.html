@@ -11,8 +11,62 @@
 </head>
 <body>
 
+  <!-- 로그인 화면: 처음 설정 · 로그인 · 비밀번호 재설정 -->
+  <div id="authScreen" class="auth">
+    <div class="auth-card">
+      <div class="auth-brand"><span class="brand-mark" aria-hidden="true">🎤</span> 우리 반 <span>발표왕</span></div>
+      <p class="auth-class" id="authClass"></p>
+
+      <form id="setupForm" hidden>
+        <h2>처음 오셨네요! 👋</h2>
+        <p class="sub">선생님 비밀번호를 정해 주세요. 이 비밀번호가 있어야 기록하고 고칠 수 있어요.</p>
+        <div class="field"><label for="setupPw1">선생님 비밀번호 (4자 이상)</label><input id="setupPw1" type="password" autocomplete="new-password" minlength="4" required></div>
+        <div class="field"><label for="setupPw2">한 번 더 입력</label><input id="setupPw2" type="password" autocomplete="new-password" minlength="4" required></div>
+        <button class="big-btn wide" type="submit">비밀번호 정하기</button>
+        <p class="auth-err" id="setupErr" role="alert"></p>
+      </form>
+
+      <div id="recoveryBox" hidden>
+        <h2>복구 코드를 적어 두세요 📝</h2>
+        <p class="sub">비밀번호를 잊었을 때 이 코드로 새 비밀번호를 만들 수 있어요. 학생이 볼 수 없는 곳에 적어 두세요.</p>
+        <p class="recovery-code" id="recoveryCode"></p>
+        <button class="big-btn wide" id="recoveryDone" type="button">적어 두었어요</button>
+      </div>
+
+      <div id="loginBox" hidden>
+        <div class="seg center auth-tabs" role="tablist">
+          <button type="button" data-role="teacher" aria-pressed="true">👩‍🏫 선생님</button>
+          <button type="button" data-role="student" aria-pressed="false">🧒 학생</button>
+        </div>
+        <form id="teacherLogin">
+          <div class="field"><label for="teacherPw">선생님 비밀번호</label><input id="teacherPw" type="password" autocomplete="current-password" required></div>
+          <button class="big-btn wide" type="submit">들어가기</button>
+          <button class="link-btn" id="forgotBtn" type="button">비밀번호를 잊었어요</button>
+        </form>
+        <form id="studentLogin" hidden>
+          <div class="field"><label for="studentId">내 아이디</label><input id="studentId" placeholder="예: S001" autocomplete="username" autocapitalize="characters" maxlength="8" required></div>
+          <div class="field"><label for="studentPin">내 비밀번호 (숫자 4자리)</label><input id="studentPin" type="password" inputmode="numeric" autocomplete="current-password" maxlength="4" required></div>
+          <button class="big-btn wide mint" type="submit">내 기록 보기</button>
+          <p class="sub center-text">아이디와 비밀번호는 선생님께 받은 카드에 있어요.</p>
+        </form>
+        <p class="auth-err" id="loginErr" role="alert"></p>
+      </div>
+
+      <form id="resetForm" hidden>
+        <h2>새 비밀번호 만들기</h2>
+        <p class="sub">처음 비밀번호를 정할 때 받은 복구 코드를 입력해 주세요.</p>
+        <div class="field"><label for="resetCode">복구 코드</label><input id="resetCode" autocomplete="off" autocapitalize="characters" required></div>
+        <div class="field"><label for="resetPw1">새 비밀번호 (4자 이상)</label><input id="resetPw1" type="password" autocomplete="new-password" minlength="4" required></div>
+        <div class="field"><label for="resetPw2">한 번 더 입력</label><input id="resetPw2" type="password" autocomplete="new-password" minlength="4" required></div>
+        <button class="big-btn wide" type="submit">새 비밀번호 저장</button>
+        <button class="link-btn" id="resetBack" type="button">← 로그인으로 돌아가기</button>
+        <p class="auth-err" id="resetErr" role="alert"></p>
+      </form>
+    </div>
+  </div>
+
   <!-- 상단 바: 제목, 학급 이름, 날짜 -->
-  <header class="top">
+  <header class="top" id="appHeader" hidden>
     <div class="wrap top-row">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">🎤</span>
@@ -25,6 +79,10 @@
         <button id="nextDay" class="round" aria-label="다음날">›</button>
         <button id="todayBtn" class="pill-btn">오늘</button>
       </div>
+      <div class="userbar">
+        <span class="who-chip">👩‍🏫 선생님</span>
+        <button id="lockBtn" class="pill-btn" title="자리를 비울 때 화면을 잠가요">🔒 잠그기</button>
+      </div>
     </div>
     <div class="wrap">
       <nav class="tabs" role="tablist">
@@ -35,7 +93,7 @@
     </div>
   </header>
 
-  <main class="wrap">
+  <main class="wrap" id="appMain" hidden>
     <!-- 요약 숫자 -->
     <section class="summary" aria-label="요약">
       <div class="stat c-peach"><div class="k" id="sumDayLabel">오늘 발표</div><div class="v" id="sumDay">0<small>회</small></div></div>
@@ -122,6 +180,44 @@
 
           <hr>
 
+          <h2>📂 파일로 명단 올리기</h2>
+          <p class="sub">엑셀(.xlsx), CSV, 텍스트 파일을 올리면 “번호”와 “이름(성명)” 칸을 찾아 읽어요. 나이스에서 내려받은 명렬표도 돼요.</p>
+          <label id="dropZone" class="drop-zone" for="rosterFile">
+            <input id="rosterFile" type="file" accept=".xlsx,.xls,.csv,.txt,text/csv,text/plain" hidden>
+            <span class="drop-icon" aria-hidden="true">📄</span>
+            <span><b>파일 고르기</b> 또는 여기로 끌어다 놓기</span>
+            <span class="drop-hint">.xlsx · .xls · .csv · .txt</span>
+          </label>
+          <div id="filePreview" class="file-preview" hidden>
+            <p class="sub" id="filePreviewMsg"></p>
+            <div class="preview-list" id="filePreviewList"></div>
+            <label class="check-row"><input type="checkbox" id="skipDup" checked> 이미 명단에 있는 이름은 건너뛰기</label>
+            <div class="row">
+              <button id="fileAdd" class="big-btn" type="button">추가하기</button>
+              <button id="fileCancel" class="pill-btn" type="button">취소</button>
+            </div>
+          </div>
+          <p class="sub msg" id="fileMsg"></p>
+
+          <hr>
+
+          <h2>🔒 로그인 설정</h2>
+          <p class="sub">학생은 명단의 아이디와 숫자 4자리 비밀번호로 들어와 자기 기록만 볼 수 있어요. 로그인 카드를 출력해 나눠 주세요.</p>
+          <div class="row">
+            <button id="printCards" class="pill-btn" type="button">🪪 로그인 카드 출력</button>
+            <button id="toggleChangePw" class="pill-btn" type="button">선생님 비밀번호 바꾸기</button>
+            <button id="newRecovery" class="pill-btn" type="button">복구 코드 새로 받기</button>
+          </div>
+          <form id="changePwForm" class="sub-form" hidden>
+            <div class="field"><label for="curPw">지금 비밀번호</label><input id="curPw" type="password" autocomplete="current-password" required></div>
+            <div class="field"><label for="newPw1">새 비밀번호 (4자 이상)</label><input id="newPw1" type="password" autocomplete="new-password" minlength="4" required></div>
+            <div class="field"><label for="newPw2">한 번 더 입력</label><input id="newPw2" type="password" autocomplete="new-password" minlength="4" required></div>
+            <button class="big-btn" type="submit">바꾸기</button>
+          </form>
+          <p class="sub msg" id="authMsg"></p>
+
+          <hr>
+
           <h2>💾 저장과 백업</h2>
           <p class="sub">기록은 이 컴퓨터의 브라우저에 저장돼요. 다른 컴퓨터로 옮기거나 잃어버리지 않으려면 백업 파일을 만들어 두세요.</p>
           <div class="row">
@@ -137,7 +233,7 @@
           <p class="sub">이름과 번호를 눌러 바로 고칠 수 있어요. 삭제하면 그 학생의 발표 기록도 함께 지워져요.</p>
           <div class="tablewrap">
             <table class="roster">
-              <thead><tr><th>아이디</th><th>번호</th><th>이름</th><th>누적</th><th></th></tr></thead>
+              <thead><tr><th>아이디</th><th>번호</th><th>이름</th><th>비밀번호</th><th>누적</th><th></th></tr></thead>
               <tbody id="rosterBody"></tbody>
             </table>
           </div>
@@ -145,6 +241,9 @@
       </div>
     </section>
   </main>
+
+  <!-- 학생 전용: 내 발표 기록 -->
+  <main id="studentView" class="wrap student-view" hidden></main>
 
   <!-- 발표자 뽑기 창 -->
   <div id="picker" class="modal" hidden>

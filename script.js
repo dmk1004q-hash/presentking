@@ -28,10 +28,10 @@
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const d = JSON.parse(raw);
-        if (d && Array.isArray(d.students)) return { className: d.className || "", students: d.students };
+        if (d && Array.isArray(d.students)) return { className: d.className || "", students: d.students, auth: d.auth || null };
       }
     } catch (e) { /* 저장소를 못 읽으면 빈 상태로 시작 */ }
-    return { className: "", students: [] };
+    return { className: "", students: [], auth: null };
   }
   function save() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data)); }
@@ -187,13 +187,14 @@
     const L = students(), body = $("#rosterBody");
     $("#rosterCount").textContent = L.length ? L.length + "명" : "";
     if (!L.length) {
-      body.innerHTML = '<tr><td colspan="5" style="color:var(--muted);padding:16px 6px">왼쪽에서 학생을 추가해 주세요.</td></tr>';
+      body.innerHTML = '<tr><td colspan="6" style="color:var(--muted);padding:16px 6px">왼쪽에서 학생을 추가해 주세요.</td></tr>';
       return;
     }
     body.innerHTML = L.map((s) => `<tr data-id="${s.id}">
       <td class="code">${esc(s.code)}</td>
       <td><input class="num" id="num-${s.id}" value="${s.num ?? ""}" inputmode="numeric" aria-label="${esc(s.name)} 번호"></td>
       <td><input id="nm-${s.id}" value="${esc(s.name)}" aria-label="${esc(s.name)} 이름"></td>
+      <td class="pin">${esc(s.pin || "")} <button class="pin-btn" data-pin="${s.id}" aria-label="${esc(s.name)} 비밀번호 새로 만들기">새로</button></td>
       <td>${total(s)}회</td>
       <td><div class="row" style="flex-wrap:nowrap;gap:4px"><button class="rep" data-rep="${s.id}" aria-label="${esc(s.name)} 개인 현황표 출력">📄 현황표</button><button class="del" data-del="${s.id}">삭제</button></div></td>
     </tr>`).join("");
@@ -242,7 +243,7 @@
   function addStudents(entries) {
     entries.forEach((e) => {
       // 추가할 때마다 목록이 늘어나므로 매번 "현재 가장 큰 번호 + 1"
-      state.data.students.push({ id: makeId(), code: nextCode(0), name: e.name, num: e.num, byDate: {} });
+      state.data.students.push({ id: makeId(), code: nextCode(0), name: e.name, num: e.num, pin: makePin(), byDate: {} });
     });
     save();
     render();
@@ -328,6 +329,164 @@
       rolling = false;
     };
     tick();
+  }
+
+  /* ---------- 파일로 명단 올리기 ----------
+     .xlsx/.xls(엑셀), .csv, .txt를 읽어 "번호"와 "이름" 칸을 찾습니다.
+     엑셀 파일은 고를 때만 읽기 도구(SheetJS)를 불러옵니다. */
+  const XLSX_URL = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+  const NAME_HEAD = /^(이름|성명|학생명|학생이름|name)$/i;
+  const NUM_HEAD = /^(번호|번|출석번호|학번|no\.?|num|number)$/i;
+  let pendingEntries = [];
+
+  function loadXlsxLib() {
+    if (window.XLSX) return Promise.resolve(window.XLSX);
+    return new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = XLSX_URL;
+      s.onload = () => (window.XLSX ? resolve(window.XLSX) : reject(new Error("load")));
+      s.onerror = () => reject(new Error("load"));
+      document.head.appendChild(s);
+    });
+  }
+
+  function decodeText(buf) {
+    // 한글 엑셀에서 저장한 CSV는 EUC-KR인 경우가 많아서, UTF-8이 아니면 EUC-KR로 다시 읽습니다
+    try { return new TextDecoder("utf-8", { fatal: true }).decode(buf).replace(/^﻿/, ""); }
+    catch (e) { return new TextDecoder("euc-kr").decode(buf); }
+  }
+
+  function parseCsv(text) {
+    const rows = [];
+    let row = [], cell = "", q = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (q) {
+        if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+        else if (c === '"') q = false;
+        else cell += c;
+      } else if (c === '"') q = true;
+      else if (c === ",") { row.push(cell); cell = ""; }
+      else if (c === "\n" || c === "\r") {
+        if (c === "\r" && text[i + 1] === "\n") i++;
+        row.push(cell); rows.push(row); row = []; cell = "";
+      } else cell += c;
+    }
+    if (cell || row.length) { row.push(cell); rows.push(row); }
+    return rows;
+  }
+
+  function parseTxt(text) {
+    return text.split(/\r?\n/).map((line) => {
+      line = line.trim();
+      if (!line) return [];
+      if (line.includes("\t")) return line.split("\t");
+      if (line.includes(",")) return line.split(",");
+      const m = line.match(/^(\d{1,5})[\s.,)\-]+(.+)$/);
+      return m ? [m[1], m[2]] : [line];
+    });
+  }
+
+  function clean(v) { return String(v ?? "").replace(/\s+/g, " ").trim(); }
+  function toNum(v) {
+    const t = clean(v);
+    if (!/^\d{1,6}$/.test(t)) return null;
+    const n = parseInt(t, 10);
+    return n >= 1000 ? n % 100 : n; // 학번(예: 30215)이면 끝 두 자리를 번호로
+  }
+  function looksLikeName(v) {
+    const t = clean(v);
+    return t.length >= 1 && t.length <= 20 && !/^\d+$/.test(t) && !NAME_HEAD.test(t) && !NUM_HEAD.test(t) && /[가-힣A-Za-z]/.test(t);
+  }
+
+  function rowsToEntries(rows) {
+    rows = rows.map((r) => (r || []).map(clean));
+    let nameCol = -1, numCol = -1, start = 0;
+    for (let i = 0; i < Math.min(rows.length, 15); i++) {
+      const n = rows[i].findIndex((c) => NAME_HEAD.test(c.replace(/\s/g, "")));
+      if (n >= 0) {
+        nameCol = n;
+        numCol = rows[i].findIndex((c) => NUM_HEAD.test(c.replace(/\s/g, "")));
+        start = i + 1;
+        break;
+      }
+    }
+    const out = [], seen = new Set();
+    for (let i = start; i < rows.length; i++) {
+      const r = rows[i];
+      if (!r.some(Boolean)) continue;
+      let name, num = null;
+      if (nameCol >= 0) {
+        name = r[nameCol];
+        if (numCol >= 0) num = toNum(r[numCol]);
+      } else {
+        // 머리글이 없으면: 숫자 칸 = 번호, 처음 나오는 글자 칸 = 이름
+        const numCell = r.find((c) => toNum(c) != null);
+        num = numCell != null ? toNum(numCell) : null;
+        name = r.find(looksLikeName);
+      }
+      if (!name || !looksLikeName(name)) continue;
+      name = name.slice(0, 20);
+      const key = name + "|" + num;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ name, num });
+    }
+    return out.sort((a, b) => (a.num ?? 999) - (b.num ?? 999));
+  }
+
+  async function readRosterFile(file) {
+    const ext = (file.name.split(".").pop() || "").toLowerCase();
+    const buf = await file.arrayBuffer();
+    if (ext === "xlsx" || ext === "xls") {
+      const X = await loadXlsxLib();
+      const wb = X.read(buf, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      return rowsToEntries(X.utils.sheet_to_json(ws, { header: 1, raw: false, defval: "" }));
+    }
+    const text = decodeText(buf);
+    return rowsToEntries(ext === "csv" ? parseCsv(text) : parseTxt(text));
+  }
+
+  function existingNames() { return new Set(state.data.students.map((s) => s.name)); }
+
+  function renderFilePreview() {
+    const skip = $("#skipDup").checked, have = existingNames();
+    const dupCount = pendingEntries.filter((e) => have.has(e.name)).length;
+    const addCount = skip ? pendingEntries.length - dupCount : pendingEntries.length;
+    $("#filePreviewMsg").textContent =
+      `${pendingEntries.length}명을 찾았어요.` + (dupCount ? ` 이미 있는 이름 ${dupCount}명` + (skip ? "은 건너뛰어요." : "도 함께 추가해요.") : "") + ` 추가될 학생: ${addCount}명`;
+    $("#filePreviewList").innerHTML = pendingEntries
+      .map((e) => `<span class="${skip && have.has(e.name) ? "dup" : ""}">${e.num != null ? e.num + ". " : ""}${esc(e.name)}</span>`)
+      .join("");
+    $("#fileAdd").disabled = addCount === 0;
+    $("#filePreview").hidden = false;
+  }
+
+  async function handleRosterFile(file) {
+    $("#fileMsg").textContent = "";
+    $("#filePreview").hidden = true;
+    pendingEntries = [];
+    const ext = (file.name.split(".").pop() || "").toLowerCase();
+    if (!["xlsx", "xls", "csv", "txt"].includes(ext)) {
+      $("#fileMsg").textContent = "엑셀(.xlsx, .xls), CSV, 텍스트(.txt) 파일만 올릴 수 있어요.";
+      return;
+    }
+    $("#fileMsg").textContent = "파일을 읽는 중…";
+    try {
+      pendingEntries = await readRosterFile(file);
+    } catch (e) {
+      $("#fileMsg").textContent = e && e.message === "load"
+        ? "엑셀 파일을 읽는 도구를 불러오지 못했어요. 인터넷 연결을 확인하거나, 엑셀에서 CSV로 저장해 올려 주세요."
+        : "파일을 읽지 못했어요. 파일이 열려 있거나 손상되지 않았는지 확인해 주세요.";
+      return;
+    }
+    if (!pendingEntries.length) {
+      $("#fileMsg").textContent = "학생 이름을 찾지 못했어요. 첫 줄에 “번호”, “이름” 머리글을 넣거나, 한 줄에 한 명씩 적어 주세요.";
+      return;
+    }
+    $("#fileMsg").textContent = `“${file.name}”`;
+    renderFilePreview();
   }
 
   /* ---------- A4 개인 발표 현황표 ----------
@@ -520,7 +679,8 @@
         if (!ok) throw new Error("형식");
         state.data = {
           className: typeof d.className === "string" ? d.className : "",
-          students: d.students.map((s) => ({ id: s.id || makeId(), code: s.code, name: s.name, num: s.num ?? null, byDate: s.byDate || {} })),
+          students: d.students.map((s) => ({ id: s.id || makeId(), code: s.code, name: s.name, num: s.num ?? null, pin: /^\d{4}$/.test(s.pin || "") ? s.pin : makePin(), byDate: s.byDate || {} })),
+          auth: state.data.auth, // 선생님 비밀번호는 지금 것을 그대로 둡니다
         };
         save();
         render();
@@ -531,6 +691,320 @@
     };
     reader.readAsText(file);
   }
+
+  /* =========================================================
+     로그인
+     - 서버 없이 이 브라우저 안에서만 확인하는 "교실용 잠금"입니다.
+     - 선생님 비밀번호와 복구 코드는 SHA-256 해시로만 저장합니다.
+     - 학생 비밀번호(숫자 4자리)는 선생님이 명단에서 확인·재발급할 수 있도록 그대로 저장합니다.
+     - 로그인 상태는 sessionStorage에 두어, 브라우저 창을 닫으면 자동으로 로그아웃됩니다.
+     ========================================================= */
+  const SESSION_KEY = "balpyo-session";
+  const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // 헷갈리는 0/O, 1/I 제외
+
+  function sha256(str) {
+    const K = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+    const H = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+    const bytes = new TextEncoder().encode(str);
+    const len = bytes.length, total = ((len + 9 + 63) >> 6) << 6;
+    const m = new Uint8Array(total);
+    m.set(bytes); m[len] = 0x80;
+    const bits = len * 8;
+    for (let i = 0; i < 8; i++) m[total - 1 - i] = Math.floor(bits / Math.pow(2, 8 * i)) & 0xff;
+    const w = new Uint32Array(64);
+    const r = (x, n) => (x >>> n) | (x << (32 - n));
+    for (let off = 0; off < total; off += 64) {
+      for (let i = 0; i < 16; i++) w[i] = (m[off + i * 4] << 24) | (m[off + i * 4 + 1] << 16) | (m[off + i * 4 + 2] << 8) | m[off + i * 4 + 3];
+      for (let i = 16; i < 64; i++) {
+        const s0 = r(w[i - 15], 7) ^ r(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+        const s1 = r(w[i - 2], 17) ^ r(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+        w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+      }
+      let [a, b, c, d, e, f, g, h] = H;
+      for (let i = 0; i < 64; i++) {
+        const t1 = (h + (r(e, 6) ^ r(e, 11) ^ r(e, 25)) + ((e & f) ^ (~e & g)) + K[i] + w[i]) | 0;
+        const t2 = ((r(a, 2) ^ r(a, 13) ^ r(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+        h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+      }
+      H[0] = (H[0] + a) | 0; H[1] = (H[1] + b) | 0; H[2] = (H[2] + c) | 0; H[3] = (H[3] + d) | 0;
+      H[4] = (H[4] + e) | 0; H[5] = (H[5] + f) | 0; H[6] = (H[6] + g) | 0; H[7] = (H[7] + h) | 0;
+    }
+    return H.map((x) => (x >>> 0).toString(16).padStart(8, "0")).join("");
+  }
+
+  function randInt(n) {
+    try { const a = new Uint32Array(1); crypto.getRandomValues(a); return a[0] % n; }
+    catch (e) { return Math.floor(Math.random() * n); }
+  }
+  function makePin() { return String(randInt(10000)).padStart(4, "0"); }
+  function makeSalt() { let s = ""; for (let i = 0; i < 16; i++) s += randInt(16).toString(16); return s; }
+  function makeRecovery() {
+    let s = "";
+    for (let i = 0; i < 8; i++) s += CODE_CHARS[randInt(CODE_CHARS.length)];
+    return s.slice(0, 4) + "-" + s.slice(4);
+  }
+  function normCode(c) { return String(c || "").toUpperCase().replace(/[^A-Z0-9]/g, ""); }
+  function hashWith(salt, text) { return sha256(salt + ":" + text); }
+
+  function getSession() {
+    try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null"); } catch (e) { return null; }
+  }
+  function setSession(v) {
+    try { v ? sessionStorage.setItem(SESSION_KEY, JSON.stringify(v)) : sessionStorage.removeItem(SESSION_KEY); } catch (e) { /* 세션 저장이 막혀도 이번 화면에서는 계속 사용 */ }
+  }
+
+  // 잘못된 비밀번호를 5번 넘게 입력하면 30초 동안 막습니다
+  const tries = { count: 0, until: 0 };
+  function tooMany() {
+    if (Date.now() < tries.until) {
+      return `비밀번호를 여러 번 틀렸어요. ${Math.ceil((tries.until - Date.now()) / 1000)}초 뒤에 다시 해 주세요.`;
+    }
+    return "";
+  }
+  function failed() {
+    tries.count++;
+    if (tries.count >= 5) { tries.until = Date.now() + 30000; tries.count = 0; }
+  }
+
+  function ensurePins() {
+    let changed = false;
+    state.data.students.forEach((st) => { if (!/^\d{4}$/.test(st.pin || "")) { st.pin = makePin(); changed = true; } });
+    if (changed) save();
+  }
+
+  function showScreen(mode) {
+    const authModes = ["setup", "recovery", "login", "reset"];
+    $("#authScreen").hidden = !authModes.includes(mode);
+    $("#setupForm").hidden = mode !== "setup";
+    $("#recoveryBox").hidden = mode !== "recovery";
+    $("#loginBox").hidden = mode !== "login";
+    $("#resetForm").hidden = mode !== "reset";
+    $("#appHeader").hidden = mode !== "teacher";
+    $("#appMain").hidden = mode !== "teacher";
+    $("#studentView").hidden = mode !== "student";
+    if (mode !== "teacher") { $("#picker").hidden = true; }
+    $("#authClass").textContent = state.data.className || "";
+    document.title = (state.data.className ? state.data.className + " " : "") + "발표왕";
+    ["setupErr", "loginErr", "resetErr"].forEach((id) => { $("#" + id).textContent = ""; });
+    const focusId = { setup: "setupPw1", login: getLoginRole() === "student" ? "studentId" : "teacherPw", reset: "resetCode", recovery: "recoveryDone" }[mode];
+    if (focusId) setTimeout(() => { const el = document.getElementById(focusId); if (el) el.focus(); }, 0);
+  }
+
+  function getLoginRole() {
+    const b = document.querySelector('.auth-tabs [aria-pressed="true"]');
+    return b ? b.dataset.role : "teacher";
+  }
+  function setLoginRole(role) {
+    document.querySelectorAll(".auth-tabs button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.role === role)));
+    $("#teacherLogin").hidden = role !== "teacher";
+    $("#studentLogin").hidden = role !== "student";
+    $("#loginErr").textContent = "";
+    setTimeout(() => $(role === "student" ? "#studentId" : "#teacherPw").focus(), 0);
+  }
+
+  function enterTeacher() {
+    setSession({ role: "teacher" });
+    state.date = todayStr();
+    showScreen("teacher");
+    setView(state.view || "record");
+  }
+  function enterStudent(st) {
+    setSession({ role: "student", id: st.id });
+    state.date = todayStr();
+    renderStudentView(st);
+    showScreen("student");
+  }
+  function logout() {
+    setSession(null);
+    $("#teacherPw").value = "";
+    $("#studentPin").value = "";
+    showScreen(state.data.auth ? "login" : "setup");
+  }
+
+  function setTeacherPassword(pw) {
+    const salt = makeSalt();
+    const code = makeRecovery();
+    state.data.auth = { salt, teacherHash: hashWith(salt, pw), recoveryHash: hashWith(salt, normCode(code)) };
+    save();
+    return code;
+  }
+
+  function startApp() {
+    ensurePins();
+    const ses = getSession();
+    if (!state.data.auth) { showScreen("setup"); return; }
+    if (ses && ses.role === "teacher") { enterTeacher(); return; }
+    if (ses && ses.role === "student") { const st = find(ses.id); if (st) { enterStudent(st); return; } }
+    setLoginRole("teacher");
+    showScreen("login");
+  }
+
+  /* ---------- 학생 화면: 내 발표 기록 ---------- */
+  function renderStudentView(st) {
+    const L = state.data.students;
+    const t = total(st);
+    const avg = L.length ? L.reduce((a, x) => a + total(x), 0) / L.length : 0;
+    const today = dayCount(st, todayStr());
+    const week = countIn(st, bounds("week"));
+    const month = countIn(st, bounds("month"));
+    let cheer;
+    if (t === 0) cheer = "🌱 첫 발표를 기다리고 있어요. 손을 번쩍 들어 볼까요?";
+    else if (today > 0) cheer = `🎉 오늘 벌써 ${today}번 발표했어요! 멋져요.`;
+    else if (week === 0) cheer = "🙋 이번 주에는 아직 발표가 없어요. 오늘 한 번 도전해 봐요!";
+    else if (t >= avg) cheer = "⭐ 발표를 꾸준히 잘하고 있어요. 친구들 이야기도 귀 기울여 들어 줘요!";
+    else cheer = "💪 조금씩 늘고 있어요. 다음 시간에도 손을 들어 봐요!";
+
+    $("#studentView").innerHTML = `
+      <div class="sv-top">
+        <div class="sv-hello">
+          <span class="brand-mark" aria-hidden="true">🎤</span>
+          <div><h1>${esc(st.name)}, 안녕! 👋</h1><p>${esc(state.data.className || "우리 반")} · ${st.num != null ? st.num + "번 · " : ""}${esc(st.code)}</p></div>
+        </div>
+        <button id="studentLogout" class="pill-btn" type="button">나가기</button>
+      </div>
+      <p class="sv-cheer">${cheer}</p>
+      <section class="sv-stats" aria-label="내 발표 횟수">
+        <div class="stat c-peach"><div class="k">오늘</div><div class="v">${today}<small>회</small></div></div>
+        <div class="stat c-mint"><div class="k">이번 주</div><div class="v">${week}<small>회</small></div></div>
+        <div class="stat c-sky"><div class="k">이번 달</div><div class="v">${month}<small>회</small></div></div>
+        <div class="stat c-lilac"><div class="k">지금까지 모두</div><div class="v">${t}<small>회</small></div></div>
+      </section>
+      <div class="sv-grid">
+        <div class="panel sv-chart">
+          <h2>📈 달마다 발표한 횟수</h2>
+          <p class="sub">분홍 막대는 나, 파란 점선은 우리 반 평균(지금까지 ${avg.toFixed(1)}회)이에요.</p>
+          ${monthChart(st, monthRange())}
+        </div>
+        <div class="panel">
+          <h2>📅 최근 4주</h2>
+          <p class="sub">색이 진할수록 발표를 많이 한 날이에요.</p>
+          <div class="rp-weeks">${recentWeeks(st)}</div>
+        </div>
+      </div>`;
+    $("#studentLogout").addEventListener("click", logout);
+  }
+
+  /* ---------- 로그인 카드 출력 (A4 한 장에 21명) ---------- */
+  function printLoginCards() {
+    const L = students();
+    if (!L.length) { $("#authMsg").textContent = "먼저 학생을 추가해 주세요."; return; }
+    const addr = /^https?:/.test(location.protocol) ? location.href.split("#")[0] : "";
+    const card = (st) => `<div class="login-card">
+      <div class="lc-top"><span>${esc(state.data.className || "우리 반")} 발표왕</span><span>${st.num != null ? st.num + "번" : ""}</span></div>
+      <div class="lc-name">${esc(st.name)}</div>
+      <div class="lc-row"><span>아이디</span><b>${esc(st.code)}</b></div>
+      <div class="lc-row"><span>비밀번호</span><b>${esc(st.pin)}</b></div>
+      ${addr ? `<div class="lc-top"><span>${esc(addr)}</span></div>` : ""}
+    </div>`;
+    let html = "";
+    for (let i = 0; i < L.length; i += 21) html += `<div class="cards-page">${L.slice(i, i + 21).map(card).join("")}</div>`;
+    $("#printArea").innerHTML = html;
+    const go = () => setTimeout(() => window.print(), 50);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(go); else go();
+  }
+
+  /* ---------- 로그인 화면 이벤트 ---------- */
+  $("#setupForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const a = $("#setupPw1").value, b = $("#setupPw2").value;
+    if (a.length < 4) { $("#setupErr").textContent = "비밀번호는 4자 이상으로 정해 주세요."; return; }
+    if (a !== b) { $("#setupErr").textContent = "두 비밀번호가 달라요. 다시 입력해 주세요."; return; }
+    const code = setTeacherPassword(a);
+    $("#setupPw1").value = $("#setupPw2").value = "";
+    $("#recoveryCode").textContent = code;
+    showScreen("recovery");
+  });
+  $("#recoveryDone").addEventListener("click", () => {
+    $("#recoveryCode").textContent = "";
+    enterTeacher();
+  });
+  document.querySelectorAll(".auth-tabs button").forEach((b) => b.addEventListener("click", () => setLoginRole(b.dataset.role)));
+
+  $("#teacherLogin").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const wait = tooMany();
+    if (wait) { $("#loginErr").textContent = wait; return; }
+    const au = state.data.auth;
+    if (au && hashWith(au.salt, $("#teacherPw").value) === au.teacherHash) {
+      tries.count = 0;
+      $("#teacherPw").value = "";
+      enterTeacher();
+    } else {
+      failed();
+      $("#loginErr").textContent = "비밀번호가 맞지 않아요.";
+      $("#teacherPw").select();
+    }
+  });
+  $("#studentLogin").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const wait = tooMany();
+    if (wait) { $("#loginErr").textContent = wait; return; }
+    let id = $("#studentId").value.trim().toUpperCase();
+    if (/^\d{1,3}$/.test(id)) id = "S" + id.padStart(3, "0"); // "1"이나 "001"만 써도 S001로
+    const st = state.data.students.find((x) => x.code.toUpperCase() === id);
+    if (st && st.pin === $("#studentPin").value.trim()) {
+      tries.count = 0;
+      $("#studentId").value = $("#studentPin").value = "";
+      enterStudent(st);
+    } else {
+      failed();
+      $("#loginErr").textContent = "아이디나 비밀번호가 맞지 않아요. 카드를 다시 확인해 주세요.";
+      $("#studentPin").value = "";
+      $("#studentPin").focus();
+    }
+  });
+
+  $("#forgotBtn").addEventListener("click", () => showScreen("reset"));
+  $("#resetBack").addEventListener("click", () => { setLoginRole("teacher"); showScreen("login"); });
+  $("#resetForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const wait = tooMany();
+    if (wait) { $("#resetErr").textContent = wait; return; }
+    const au = state.data.auth;
+    if (!au || hashWith(au.salt, normCode($("#resetCode").value)) !== au.recoveryHash) {
+      failed();
+      $("#resetErr").textContent = "복구 코드가 맞지 않아요.";
+      return;
+    }
+    const a = $("#resetPw1").value, b = $("#resetPw2").value;
+    if (a.length < 4) { $("#resetErr").textContent = "새 비밀번호는 4자 이상으로 정해 주세요."; return; }
+    if (a !== b) { $("#resetErr").textContent = "두 비밀번호가 달라요."; return; }
+    const code = setTeacherPassword(a); // 복구 코드도 새로 만들어 다시 보여 줍니다
+    ["resetCode", "resetPw1", "resetPw2"].forEach((id) => { $("#" + id).value = ""; });
+    $("#recoveryCode").textContent = code;
+    showScreen("recovery");
+  });
+
+  /* ---------- 선생님 화면: 잠그기, 비밀번호 관리 ---------- */
+  $("#lockBtn").addEventListener("click", logout);
+  $("#printCards").addEventListener("click", printLoginCards);
+  $("#toggleChangePw").addEventListener("click", () => {
+    const f = $("#changePwForm");
+    f.hidden = !f.hidden;
+    if (!f.hidden) $("#curPw").focus();
+  });
+  $("#changePwForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const au = state.data.auth;
+    if (!au || hashWith(au.salt, $("#curPw").value) !== au.teacherHash) { $("#authMsg").textContent = "지금 비밀번호가 맞지 않아요."; return; }
+    const a = $("#newPw1").value, b = $("#newPw2").value;
+    if (a.length < 4) { $("#authMsg").textContent = "새 비밀번호는 4자 이상으로 정해 주세요."; return; }
+    if (a !== b) { $("#authMsg").textContent = "새 비밀번호 두 개가 달라요."; return; }
+    // 복구 코드는 그대로 두고 비밀번호만 바꿉니다
+    au.teacherHash = hashWith(au.salt, a);
+    save();
+    ["curPw", "newPw1", "newPw2"].forEach((id) => { $("#" + id).value = ""; });
+    $("#changePwForm").hidden = true;
+    $("#authMsg").textContent = "선생님 비밀번호를 바꿨어요.";
+  });
+  $("#newRecovery").addEventListener("click", () => {
+    const au = state.data.auth;
+    if (!au) return;
+    const code = makeRecovery();
+    au.recoveryHash = hashWith(au.salt, normCode(code));
+    save();
+    $("#authMsg").innerHTML = `새 복구 코드: <b class="recovery-inline">${code}</b> 학생이 볼 수 없는 곳에 적어 두세요. 예전 코드는 이제 쓸 수 없어요.`;
+  });
 
   /* ---------- 이벤트 연결 ---------- */
   document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
@@ -616,6 +1090,12 @@
   $("#printAll").addEventListener("click", () => printReports(students()));
 
   $("#rosterBody").addEventListener("click", (e) => {
+    const pinBtn = e.target.closest("[data-pin]");
+    if (pinBtn) {
+      const st = find(pinBtn.dataset.pin);
+      if (st) { st.pin = makePin(); save(); render(); toast(`${st.name} 학생의 새 비밀번호: ${st.pin}`); }
+      return;
+    }
     const rep = e.target.closest("[data-rep]");
     if (rep) { const s = find(rep.dataset.rep); if (s) printReports([s]); return; }
     const b = e.target.closest("[data-del]");
@@ -626,6 +1106,36 @@
     b.classList.add("arm");
     b.textContent = "정말 삭제";
     setTimeout(() => { b.classList.remove("arm"); b.textContent = "삭제"; }, 3000);
+  });
+
+  // 파일로 명단 올리기
+  $("#rosterFile").addEventListener("change", (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (f) handleRosterFile(f);
+    e.target.value = "";
+  });
+  const dz = $("#dropZone");
+  ["dragenter", "dragover"].forEach((t) => dz.addEventListener(t, (e) => { e.preventDefault(); dz.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((t) => dz.addEventListener(t, () => dz.classList.remove("over")));
+  dz.addEventListener("drop", (e) => {
+    e.preventDefault();
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) handleRosterFile(f);
+  });
+  $("#skipDup").addEventListener("change", renderFilePreview);
+  $("#fileCancel").addEventListener("click", () => {
+    pendingEntries = [];
+    $("#filePreview").hidden = true;
+    $("#fileMsg").textContent = "";
+  });
+  $("#fileAdd").addEventListener("click", () => {
+    const have = existingNames();
+    const list = $("#skipDup").checked ? pendingEntries.filter((e) => !have.has(e.name)) : pendingEntries;
+    if (!list.length) return;
+    addStudents(list);
+    pendingEntries = [];
+    $("#filePreview").hidden = true;
+    $("#fileMsg").textContent = `파일에서 ${list.length}명을 추가했어요.`;
   });
 
   $("#exportCsv").addEventListener("click", exportCsv);
@@ -661,9 +1171,13 @@
 
   // 다른 탭에서 바뀐 기록 반영
   window.addEventListener("storage", (e) => {
-    if (e.key === STORAGE_KEY) { state.data = load(); render(); }
+    if (e.key !== STORAGE_KEY) return;
+    state.data = load();
+    const ses = getSession();
+    if (ses && ses.role === "teacher") render();
+    if (ses && ses.role === "student") { const st = find(ses.id); st ? renderStudentView(st) : logout(); }
   });
 
   /* ---------- 시작 ---------- */
-  render();
+  startApp();
 })();
